@@ -1,0 +1,328 @@
+---
+title: "Análise Folha de Pagamento Prefeitura Porto Alegre - RS"
+author: "José Mateus e Gabriel Nachtigal"
+date: "02 de junho de 2019"
+output: 
+  html_document:
+    theme: "flatly"
+    toc: true # adiciona o indice
+    toc_depth: 3 # Definindo a profundidade do indice (definido pelos títulos #, ##, ###)
+    toc_float: true # deixa o indice aparecendo dinâmicamente
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Análise e Coleta de dados
+
+### Introdução
+
+Essa análise busca demonstrar de forma ampla e direta os conceitos de Data Mining, também conhecido como Mineração de Dados, e suas possíveis aplicações em nosso dia a dia.
+Análise a seguir utiliza algumas técnicas e algoritmos especificos na *Linguagem R* que normalamente são utilizados por **Cientistas de Dados** para analisar e chegar a uma conclusão a partir dos dados coletados.
+
+Escolhemos uma base de dados pública da Prefeitura de Porto Alegre - RS, referente a folha de remuneração dos servidores do estado.
+A extração dos dados foi realizada pelo portal de transparência da prefeitura. 
+link: http://portaltransparencia.procempa.com.br/portalTransparencia/fpRemuneracaoPesquisa.do?viaMenu=true
+
+## Coleta de Dados
+
+
+### Script em R
+
+Bibliotecas utilizadas para desenvolver o código em Linguagem R:
+
+```{r eval = FALSE}
+library(tidyverse)
+library(data.table)
+library(genderBR)
+```
+
++ **tidyverse** - Pacote que contempla uma serie de outros pacores, voltado para análise e manipulação de dados;
++ **data.table** - Pacote utilizado para trabalhar data tables de forma mais rápida e dinâmica;
++ **genderBR** - Pacote para prever e relatar o gênero de nomes brasileiros usando os dados do Censo do Instituto Brasileiro de Geografia e Estatística.
+
+### Lendo os dados
+
+utilizando a biblioteca *readr* para ler os arquivos CSV. É coletado todos os dados necessarios para gerar a base de clientes, onde se lê arquivo por arquivo e se armazena o resultado dentro de um data frame.
+
+```{r eval = FALSE}
+#coletando dados
+dados_salarios_poa <- data.frame() #Criando data frame
+nome_arquivo <- list.files('arquivos/') #Listando todos os arquivos do diretorio
+lista_arquivos <- NULL #Lista auxiliar
+
+for (i in 1:length(nome_arquivo)) { #Lendo arquivos e armazenando em uma lista
+  lista_arquivos[[i]] <- read.csv2(file = paste0('arquivos/', nome_arquivo[i]),
+                                   sep = ';',
+                                   stringsAsFactors = FALSE)
+  cat(nome_arquivo[i],'\n')
+}
+
+for (i in 1:length(lista_arquivos)) { #Unificando todos arquivos em um dataframe
+  dados_salarios_poa <- rbind(dados_salarios_poa, lista_arquivos[[i]])    
+}
+
+```
+
+No data frame gerado, chegou a hora de tratar os dados para facilitar a análise.
+Uma das principais dificuldades na hora de analisar os dados, é trabalhar com caracteres especiais e variaveis com letras maiúsculas e minusculas. Para isso geramos uma serie de funções para validar e limpar os dados,
+
+Removendo caracteres especiais:
+```{r eval = FALSE}
+remove_acento <- function(str,pattern="all") { #Function para limpar os caracteres especiais
+  if(!is.character(str))
+    str <- as.character(str)
+  
+  pattern <- unique(pattern)
+  
+  if(any(pattern=="Ç"))
+    pattern[pattern=="Ç"] <- "ç"
+  
+  symbols <- c(
+    acute = "áéíóúÁÉÍÓÚýÝ",
+    grave = "àèìòùÀÈÌÒÙ",
+    circunflex = "âêîôûÂÊÎÔÛ",
+    tilde = "ãõÃÕñÑ",
+    umlaut = "äëïöüÄËÏÖÜÿ",
+    cedil = "çÇ"
+  )
+  
+  nudeSymbols <- c(
+    acute = "aeiouAEIOUyY",
+    grave = "aeiouAEIOU",
+    circunflex = "aeiouAEIOU",
+    tilde = "aoAOnN",
+    umlaut = "aeiouAEIOUy",
+    cedil = "cC"
+  )
+  
+  accentTypes <- c("´","`","^","~","¨","ç")
+  
+  if(any(c("all","al","a","todos","t","to","tod","todo")%in%pattern)) 
+    return(chartr(paste(symbols, collapse=""), paste(nudeSymbols, collapse=""), str))
+  
+  for(i in which(accentTypes%in%pattern))
+    str <- chartr(symbols[i],nudeSymbols[i], str)
+  
+  return(str)
+}
+```
+
+Ajustando os nomes para um padrão em letras minúsculas e sem espaço:
+```{r eval = FALSE}
+ajustar_nomes <- function(x){ #Function para ajustar o nome das variaeis
+  x%>%
+    stringr::str_trim() %>%                                  
+    stringr::str_to_lower() %>%                              
+    remove_acento() %>%                                      
+    stringr::str_replace_all("[/' '.()]", "_") %>%           
+    stringr::str_replace_all("_+", "_") %>%                   
+    stringr::str_replace("_$", "") %>%                       
+    stringr::str_replace_all("\\.", "_")
+}           
+```
+
+### Tratando os dados
+
+Agora com todos os dados coletados e as funções para tratamento prontas. Chegou a hora de limpar e formatar os dados.
+
+```{r eval = FALSE}
+#tratnado os dados
+nomes_colunas <- ajustar_nomes(colnames(dados_salarios_poa)) #Formatando o nome das colunas
+names(dados_salarios_poa) <- nomes_colunas #Adicionando ao data frame os nomes já formatados
+
+dados_salarios_poa <- dados_salarios_poa %>% #Limpando e formatando os dados númericos. 
+  filter(
+    remuneracao_apos_deducoes_obrigatorias > 0.00 #Filtrando servidores com remuneração > 0
+  ) %>% 
+  mutate(
+    competencia                            = paste0(substr(competencia, 4, 7), '-', substr(competencia, 1, 2)),
+    remuneracao_basica_bruta               = formata_string_para_double(remuneracao_basica_bruta),
+    gratificacao_natalina                  = formata_string_para_double(gratificacao_natalina),
+    ferias                                 = formata_string_para_double(ferias),
+    outras_remuneracoes_eventuais          = formata_string_para_double(outras_remuneracoes_eventuais),
+    abate_teto                             = formata_string_para_double(abate_teto),
+    imposto_de_renda_retido_na_fonte       = formata_string_para_double(imposto_de_renda_retido_na_fonte),
+    previdencia_oficial                    = formata_string_para_double(previdencia_oficial),
+    remuneracao_apos_deducoes_obrigatorias = formata_string_para_double(remuneracao_apos_deducoes_obrigatorias),
+    demais_deducoes                        = formata_string_para_double(demais_deducoes),
+    diarias                                = formata_string_para_double(diarias),
+    demais_verbas_indenizatorias           = formata_string_para_double(demais_verbas_indenizatorias),
+    grupo_salario                          = case_when(between(remuneracao_apos_deducoes_obrigatorias, 0, 1000) ~ 'R$ 0 - R$ 1.000',
+                                                       between(remuneracao_apos_deducoes_obrigatorias, 1001, 3000) ~ 'R$ 1.001 - R$ 3.000',
+                                                       between(remuneracao_apos_deducoes_obrigatorias, 3001, 6000) ~ 'R$ 3.001 - R$ 6.000',
+                                                       between(remuneracao_apos_deducoes_obrigatorias, 6001, 9000) ~ 'R$ 6.001 - R$ 9.000',
+                                                       between(remuneracao_apos_deducoes_obrigatorias, 9001, 12000) ~ 'R$ 9.001 - R$ 12.000',
+                                                       between(remuneracao_apos_deducoes_obrigatorias, 12001, 15000) ~ 'R$ 12.001 - R$ 15.000',
+                                                       TRUE ~ '> R$ 15.000'),
+    genero                                 = get_gender(nome) #Utilizando o pacote genderBR para predizer o gênero a partir do nome do servidore
+  )
+```
+
+### Separando e selecionando dados para análise
+
+Com a base de servidores alimentada com todas as variáveis necessárias para cluesterizar o público. É executado um bloco de código que aplica todos os agrupamentos e cálculos para retorna somente o público desejado.
+
+```{r eval = FALSE}
+database_salarios <- dados_salarios_poa %>% 
+  group_by(
+    competencia,
+    genero,
+    orgao,
+    orgao_de_exercicio,
+    tipo_de_folha,
+    cargo,
+    grupo_salario
+  ) %>% 
+  summarise(
+    salario_bruto   = sum(remuneracao_basica_bruta, na.rm = TRUE),
+    salario_liquido = sum(remuneracao_apos_deducoes_obrigatorias, na.rm = TRUE),
+    qt_funcionarios = n_distinct(nome)
+  ) %>% 
+  ungroup()
+```
+
+## Análise Através de Gráficos
+
+Agora após a coleta e tratamento dos dados, chegou a hora de criar visôes para análise e tomada de decisões.
+
+```{r eval = FALSE}
+database_salarios %>% 
+  group_by(
+    competencia,
+    grupo_salario
+  ) %>% 
+  summarise(
+    count = n(),
+    salario = sum(salario_liquido)
+  ) %>% 
+  mutate(
+    percent = count/sum(count)
+  ) %>% 
+  ggplot(aes(x = competencia, y = percent, fill = grupo_salario)) +
+  geom_bar(stat = 'identity', colour = 'black') +
+  scale_y_continuous(labels=scales::percent) +
+  labs(title = 'Faixa Salarial Funcionários PREF POA')
+```
+
+![](ggplot2.png)
+
+```{r eval = FALSE}
+database_salarios %>% 
+  group_by(
+    competencia,
+    orgao,
+    grupo_salario
+  ) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  mutate(
+    percent = count/sum(count)
+  ) %>% 
+  ggplot(aes(x = competencia, y = percent, fill = grupo_salario)) +
+  geom_bar(stat = 'identity', colour = 'black') +
+  scale_y_continuous(labels=scales::percent) +
+  labs(title = 'Faixa Salarial Funcionários PREF POA') +
+  facet_wrap(~ orgao, ncol = 3, scale = 'free_y')
+```
+
+![](ggplot3.png)
+
+```{r eval = FALSE}
+database_salarios %>%
+  filter(
+    !is.na(genero)
+  ) %>% 
+  group_by(
+    competencia,
+    genero
+  ) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  mutate(
+    percent = count/sum(count)
+  ) %>% 
+  ggplot(aes(x = competencia, y = percent, fill = genero)) +
+  geom_bar(stat = 'identity', colour = 'black') +
+  scale_y_continuous(labels=scales::percent) +
+  labs(title = 'Distribuição Funcionários PREF POA - Gênero')
+```
+
+![](ggplot4.png)
+``
+```{r eval = FALSE}
+database_salarios %>% 
+  filter(
+    !is.na(genero)
+  ) %>% 
+  group_by(
+    competencia,
+    genero,
+    grupo_salario
+  ) %>% 
+  summarise(
+    count = n()
+  ) %>% 
+  mutate(
+    percent = count/sum(count)
+  ) %>% 
+  ggplot(aes(x = competencia, y = percent, fill = grupo_salario)) +
+  geom_bar(stat = 'identity', colour = 'black') +
+  scale_y_continuous(labels=scales::percent) +
+  labs(title = 'Faixa Salarial Funcionários PREF POA - Gênero') +
+  facet_wrap(~ genero)
+```
+
+![](ggplot6.png)
+
+## Conclusão
+
+
+<br>
+<br>
+
+<center>
+
+![](EndingGIF.gif)
+</center>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
